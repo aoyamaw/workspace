@@ -181,6 +181,10 @@ const assistantLoading = ref(false)
 const errorMessage = ref('')
 const favoriteMessage = ref('')
 const assistantMessage = ref('')
+const assistantOpen = ref(false)
+const assistantButtonLeft = ref(16)
+const assistantButtonTop = ref<number | null>(null)
+const assistantButtonMoved = ref(false)
 const notificationMessage = ref('')
 const notificationsEvaluating = ref(false)
 const notificationTesting = ref(false)
@@ -211,6 +215,16 @@ let notificationStream: EventSource | undefined
 let notificationEventStream: EventSource | undefined
 let suggestionTimer: number | undefined
 let suggestionRequestId = 0
+let assistantDragStart:
+  | {
+      pointerId: number
+      x: number
+      y: number
+      left: number
+      top: number
+      moved: boolean
+    }
+  | undefined
 
 // 天气助手的聊天记录，页面会根据这个数组循环渲染对话气泡。
 const chatMessages = ref<ChatMessage[]>([
@@ -268,6 +282,11 @@ const browserNotificationText = computed(() => {
   }
   return Notification.permission === 'granted' ? '已授权' : Notification.permission === 'denied' ? '已拒绝' : '未授权'
 })
+const assistantButtonStyle = computed(() => ({
+  left: `${assistantButtonLeft.value}px`,
+  top: assistantButtonTop.value === null ? '50%' : `${assistantButtonTop.value}px`,
+  transform: assistantButtonTop.value === null ? 'translateY(-50%)' : 'none',
+}))
 
 // 页面第一次加载时执行：恢复登录状态、创建匿名身份、读取收藏/通知，并默认查询上海天气。
 onMounted(async () => {
@@ -1177,6 +1196,65 @@ async function askAssistant() {
     assistantLoading.value = false
   }
 }
+
+function startAssistantButtonDrag(event: PointerEvent) {
+  const target = event.currentTarget as HTMLElement
+  const rect = target.getBoundingClientRect()
+  assistantDragStart = {
+    pointerId: event.pointerId,
+    x: event.clientX,
+    y: event.clientY,
+    left: rect.left,
+    top: rect.top,
+    moved: false,
+  }
+  target.setPointerCapture(event.pointerId)
+}
+
+function dragAssistantButton(event: PointerEvent) {
+  if (!assistantDragStart || assistantDragStart.pointerId !== event.pointerId) {
+    return
+  }
+
+  const deltaX = event.clientX - assistantDragStart.x
+  const deltaY = event.clientY - assistantDragStart.y
+  if (Math.hypot(deltaX, deltaY) > 4) {
+    assistantDragStart.moved = true
+  }
+
+  if (!assistantDragStart.moved) {
+    return
+  }
+
+  const buttonSize = 56
+  const margin = 8
+  assistantButtonLeft.value = Math.min(
+    Math.max(assistantDragStart.left + deltaX, margin),
+    window.innerWidth - buttonSize - margin,
+  )
+  assistantButtonTop.value = Math.min(
+    Math.max(assistantDragStart.top + deltaY, margin),
+    window.innerHeight - buttonSize - margin,
+  )
+  assistantButtonMoved.value = true
+}
+
+function finishAssistantButtonDrag(event: PointerEvent) {
+  if (!assistantDragStart || assistantDragStart.pointerId !== event.pointerId) {
+    return
+  }
+
+  const wasDragged = assistantDragStart.moved
+  const target = event.currentTarget as HTMLElement
+  if (target.hasPointerCapture(event.pointerId)) {
+    target.releasePointerCapture(event.pointerId)
+  }
+  assistantDragStart = undefined
+
+  if (!wasDragged) {
+    assistantOpen.value = !assistantOpen.value
+  }
+}
 </script>
 
 <template>
@@ -1549,34 +1627,6 @@ async function askAssistant() {
         </div>
       </section>
 
-      <section class="assistant" aria-label="AI 天气助手">
-        <div class="panel-heading">
-          <h2>天气助手</h2>
-          <span>{{ weather ? '已使用当前天气上下文' : '暂无实时数据' }}</span>
-        </div>
-        <div class="messages" role="log" aria-live="polite">
-          <article v-for="message in chatMessages" :key="message.id" :class="['chat-message', message.role]">
-            <span>{{ message.role === 'user' ? '你' : '助手' }}</span>
-            <p>{{ message.content }}</p>
-          </article>
-          <p v-if="assistantLoading" class="assistant-state" role="status">
-            助手正在生成回答...
-          </p>
-        </div>
-        <form class="assistant-form" @submit.prevent="askAssistant">
-          <label for="assistant-question">问题</label>
-          <textarea
-            id="assistant-question"
-            v-model="assistantQuestion"
-            rows="3"
-            placeholder="询问出行、穿衣、景点安排或天气建议"
-          />
-          <button type="submit" :disabled="assistantLoading || assistantQuestion.trim().length === 0">
-            提问
-          </button>
-        </form>
-      </section>
-
       <section class="notifications" aria-label="通知设置">
         <div>
           <h2>通知设置</h2>
@@ -1661,6 +1711,81 @@ async function askAssistant() {
           </p>
         </div>
       </section>
+    </section>
+
+    <button
+      type="button"
+      class="assistant-float-button"
+      :class="{ active: assistantOpen, moved: assistantButtonMoved }"
+      :style="assistantButtonStyle"
+      :aria-expanded="assistantOpen"
+      aria-controls="assistant-floating-panel"
+      aria-label="天气助手"
+      @pointerdown="startAssistantButtonDrag"
+      @pointermove="dragAssistantButton"
+      @pointerup="finishAssistantButtonDrag"
+      @pointercancel="finishAssistantButtonDrag"
+    >
+      <svg aria-hidden="true" viewBox="0 0 24 24">
+        <path
+          d="M7 18h10a4 4 0 0 0 .6-8A6 6 0 0 0 6.1 8.3 4.8 4.8 0 0 0 7 18Z"
+          fill="none"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+        />
+        <path
+          d="M16 3v2M21 8h-2M19.1 4.9l-1.4 1.4"
+          fill="none"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-width="2"
+        />
+      </svg>
+    </button>
+
+    <section
+      v-if="assistantOpen"
+      id="assistant-floating-panel"
+      class="assistant-floating-panel"
+      aria-label="AI 天气助手"
+    >
+      <div class="assistant-floating-heading">
+        <div>
+          <h2>天气助手</h2>
+          <span>{{ weather ? '已使用当前天气上下文' : '暂无实时数据' }}</span>
+        </div>
+        <button
+          type="button"
+          class="icon-button"
+          aria-label="关闭天气助手"
+          @click="assistantOpen = false"
+        >
+          X
+        </button>
+      </div>
+      <div class="messages" role="log" aria-live="polite">
+        <article v-for="message in chatMessages" :key="message.id" :class="['chat-message', message.role]">
+          <span>{{ message.role === 'user' ? '你' : '助手' }}</span>
+          <p>{{ message.content }}</p>
+        </article>
+        <p v-if="assistantLoading" class="assistant-state" role="status">
+          助手正在生成回答...
+        </p>
+      </div>
+      <form class="assistant-form" @submit.prevent="askAssistant">
+        <label for="assistant-question">问题</label>
+        <textarea
+          id="assistant-question"
+          v-model="assistantQuestion"
+          rows="3"
+          placeholder="询问出行、穿衣、景点安排或天气建议"
+        />
+        <button type="submit" :disabled="assistantLoading || assistantQuestion.trim().length === 0">
+          提问
+        </button>
+      </form>
     </section>
   </main>
 </template>
