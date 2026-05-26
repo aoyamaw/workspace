@@ -8,7 +8,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
 import org.springframework.r2dbc.core.DatabaseClient;
 import org.springframework.stereotype.Service;
@@ -20,6 +23,8 @@ import reactor.core.publisher.Mono;
 public class AssistantService {
 
 	// AI 天气助手服务：生成回答，并把对话记录保存到数据库。
+	private static final Logger log = LoggerFactory.getLogger(AssistantService.class);
+
 	private final DatabaseClient databaseClient;
 	private final ObjectMapper objectMapper;
 	private final WebClient aiClient;
@@ -82,20 +87,99 @@ public class AssistantService {
 			return Mono.just(fallback);
 		}
 		return aiClient.post()
-				.uri("/chat/completions")
+				.uri("/responses")
 				.header("Authorization", "Bearer " + aiApiKey)
 				.header("Content-Type", "application/json")
+				.accept(MediaType.TEXT_EVENT_STREAM)
 				.bodyValue(Map.of(
 						"model", aiModel,
-						"messages", messages(request),
-						"temperature", 0.4,
-						"max_tokens", 700
+						"instructions", instructions(),
+						"input", responseInput(request),
+						"reasoning", Map.of("effort", "low"),
+						"text", Map.of(
+								"format", Map.of("type", "text"),
+								"verbosity", "low"
+						),
+						"max_output_tokens", 700,
+						"stream", true,
+						"store", false
 				))
 				.retrieve()
-				.bodyToMono(JsonNode.class)
-				.map(payload -> payload.path("choices").path(0).path("message").path("content").asText())
+				.bodyToMono(String.class)
+				.map(this::extractAssistantAnswer)
 				.filter(answer -> answer != null && !answer.isBlank())
-				.onErrorReturn(fallback);
+				.onErrorResume(error -> {
+					log.warn("AI assistant request failed, using fallback answer: {}", error.getMessage());
+					return Mono.just(fallback);
+				})
+				.defaultIfEmpty(fallback);
+	}
+
+	private String extractAssistantAnswer(String payload) {
+		if (payload == null || payload.isBlank()) {
+			return "";
+		}
+		var trimmed = payload.trim();
+		if (trimmed.startsWith("data:") || trimmed.contains("\ndata:") || trimmed.contains("\r\ndata:")) {
+			return extractStreamingAnswer(trimmed);
+		}
+		return extractJsonAnswer(trimmed);
+	}
+
+	private String extractStreamingAnswer(String payload) {
+		var answer = new StringBuilder();
+		for (var line : payload.split("\\R")) {
+			var trimmed = line.trim();
+			if (!trimmed.startsWith("data:")) {
+				continue;
+			}
+			var data = trimmed.substring("data:".length()).trim();
+			if (data.isBlank() || "[DONE]".equals(data)) {
+				continue;
+			}
+			var chunk = readJson(data);
+			if (chunk == null) {
+				continue;
+			}
+			var content = chunk.path("choices").path(0).path("delta").path("content").asText("");
+			if (content.isBlank()) {
+				content = chunk.path("delta").asText("");
+			}
+			if (!content.isBlank()) {
+				answer.append(content);
+			}
+		}
+		return answer.toString().trim();
+	}
+
+	private String extractJsonAnswer(String payload) {
+		var response = readJson(payload);
+		if (response == null) {
+			return "";
+		}
+		return response.path("choices").path(0).path("message").path("content").asText("").trim();
+	}
+
+	private JsonNode readJson(String payload) {
+		try {
+			return objectMapper.readTree(payload);
+		} catch (JsonProcessingException error) {
+			log.warn("Failed to parse AI response JSON: {}", error.getMessage());
+			return null;
+		}
+	}
+
+	private String instructions() {
+		return """
+				你是智能天气应用里的天气助手。你必须直接输出最终答案，不要只进行推理，也不要返回空内容。只根据用户提供的天气上下文和常识给出建议；不要编造实时天气、灾害预警或官方通知。涉及极端天气、安全决策、预警和应急事项时，提醒用户以官方气象和应急渠道为准。回答简洁、具体、中文优先。
+				""";
+	}
+
+	private String responseInput(AssistantRequest request) {
+		if (request.weatherContext() == null) {
+			return "当前没有实时天气上下文。请提示用户先搜索城市，只能提供通用天气建议。\n\n用户问题：" + request.message().trim();
+		}
+		return "当前天气上下文 JSON: " + toJson(request.weatherContext()) + "\n\n用户问题：" + request.message().trim();
 	}
 
 	private List<Map<String, String>> messages(AssistantRequest request) {
@@ -104,7 +188,7 @@ public class AssistantService {
 		messages.add(Map.of(
 				"role", "system",
 				"content", """
-						你是智能天气应用里的天气助手。只根据用户提供的天气上下文和常识给出建议；不要编造实时天气、灾害预警或官方通知。涉及极端天气、安全决策、预警和应急事项时，提醒用户以官方气象和应急渠道为准。回答简洁、具体、中文优先。
+						你是智能天气应用里的天气助手。你必须直接输出最终答案，不要只进行推理，也不要返回空内容。只根据用户提供的天气上下文和常识给出建议；不要编造实时天气、灾害预警或官方通知。涉及极端天气、安全决策、预警和应急事项时，提醒用户以官方气象和应急渠道为准。回答简洁、具体、中文优先。
 						"""
 		));
 		if (request.weatherContext() != null) {

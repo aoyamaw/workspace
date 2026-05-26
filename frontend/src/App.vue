@@ -142,6 +142,30 @@ type WebPushConfigResponse = {
   checkedAt: string
 }
 
+type LocalRecommendationItem = {
+  id: string
+  category: 'food' | 'place'
+  rank: number
+  name: string
+  description: string
+  imageUrl: string
+  imageAlt: string
+  sourceTitle: string
+  sourceUrl: string
+  batchId: string
+}
+
+type LocalRecommendationResponse = {
+  batchId: string
+  providerLocationId: string
+  displayName: string
+  foods: LocalRecommendationItem[]
+  places: LocalRecommendationItem[]
+  hasMore: boolean
+  message: string
+  generatedAt: string
+}
+
 // 后端接口地址。开发环境里前端 5173 端口会请求后端 8080 端口。
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080'
 const webPushPublicKey = ref(import.meta.env.VITE_WEB_PUSH_PUBLIC_KEY ?? '')
@@ -161,6 +185,8 @@ const notificationMessage = ref('')
 const notificationsEvaluating = ref(false)
 const notificationTesting = ref(false)
 const notificationsStreaming = ref(false)
+const recommendationsLoading = ref(false)
+const recommendationsRefreshing = ref(false)
 const webPushConfigured = ref(false)
 const userId = ref(localStorage.getItem('weather-app-user-id') ?? '')
 const authToken = ref(localStorage.getItem('weather-app-auth-token') ?? '')
@@ -177,6 +203,9 @@ const favorites = ref<FavoriteCity[]>([])
 const notificationSubscriptions = ref<NotificationSubscription[]>([])
 const notificationEvents = ref<NotificationEvent[]>([])
 const districtCandidates = ref<LocationCandidate[]>([])
+const localRecommendations = ref<LocalRecommendationResponse | null>(null)
+const recommendationMessage = ref('')
+let recommendationRequestId = 0
 let notificationStream: EventSource | undefined
 let notificationEventStream: EventSource | undefined
 let suggestionTimer: number | undefined
@@ -196,6 +225,15 @@ const canSearch = computed(() => cityQuery.value.trim().length > 0)
 const forecast = computed(() => weather.value?.forecast ?? [])
 const current = computed(() => weather.value?.current ?? null)
 const activeCandidateIndex = ref(-1)
+const recommendationFoods = computed(() => localRecommendations.value?.foods ?? [])
+const recommendationPlaces = computed(() => localRecommendations.value?.places ?? [])
+const displayedRecommendationIds = computed(() => [
+  ...recommendationFoods.value.map((item) => item.id),
+  ...recommendationPlaces.value.map((item) => item.id),
+])
+const canRefreshRecommendations = computed(
+  () => Boolean(weather.value && localRecommendations.value) && !recommendationsLoading.value && !recommendationsRefreshing.value,
+)
 
 // 根据当前天气城市，判断它是否已经存在于收藏列表中。
 const currentFavorite = computed(() => {
@@ -648,6 +686,8 @@ async function searchWeather(location?: LocationCandidate) {
       activeCandidateIndex.value = payload.candidates.length ? 0 : -1
       districtCandidates.value = []
       weather.value = null
+      localRecommendations.value = null
+      recommendationMessage.value = ''
       errorMessage.value = payload.message
       return
     }
@@ -655,6 +695,8 @@ async function searchWeather(location?: LocationCandidate) {
     if (payload.status === 'unsupported' || !payload.weather) {
       districtCandidates.value = []
       weather.value = null
+      localRecommendations.value = null
+      recommendationMessage.value = ''
       errorMessage.value = payload.message
       return
     }
@@ -667,11 +709,87 @@ async function searchWeather(location?: LocationCandidate) {
     cityQuery.value = payload.weather.location.name
     await loadFavorites()
     await loadNotifications()
+    void loadRecommendations(payload.weather.location)
   } catch (error) {
     weather.value = null
+    localRecommendations.value = null
+    recommendationMessage.value = ''
     errorMessage.value = error instanceof Error ? error.message : '天气查询失败。'
   } finally {
     loading.value = false
+  }
+}
+
+async function loadRecommendations(location: LocationCandidate) {
+  const requestId = ++recommendationRequestId
+  recommendationsLoading.value = true
+  recommendationMessage.value = ''
+  localRecommendations.value = null
+  try {
+    const params = new URLSearchParams({
+      providerLocationId: location.id,
+      displayName: location.displayName,
+    })
+    const response = await fetch(`${apiBaseUrl}/api/recommendations/local?${params.toString()}`, {
+      headers: authHeaders(),
+    })
+    if (!response.ok) {
+      throw new Error(`读取本地推荐失败，状态码 ${response.status}`)
+    }
+    const payload = (await response.json()) as LocalRecommendationResponse
+    if (requestId !== recommendationRequestId) {
+      return
+    }
+    localRecommendations.value = payload
+    recommendationMessage.value = payload.message
+  } catch (error) {
+    if (requestId === recommendationRequestId) {
+      recommendationMessage.value = error instanceof Error ? error.message : '本地推荐暂不可用。'
+    }
+  } finally {
+    if (requestId === recommendationRequestId) {
+      recommendationsLoading.value = false
+    }
+  }
+}
+
+async function refreshRecommendations() {
+  if (!weather.value || !localRecommendations.value) {
+    return
+  }
+  const requestId = ++recommendationRequestId
+  recommendationsRefreshing.value = true
+  recommendationMessage.value = ''
+  try {
+    const response = await fetch(`${apiBaseUrl}/api/recommendations/local/refresh`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({
+        providerLocationId: weather.value.location.id,
+        displayName: weather.value.location.displayName,
+        currentBatchId: localRecommendations.value.batchId,
+        displayedItemIds: displayedRecommendationIds.value,
+      }),
+    })
+    if (!response.ok) {
+      throw new Error(`换一批失败，状态码 ${response.status}`)
+    }
+    const payload = (await response.json()) as LocalRecommendationResponse
+    if (requestId !== recommendationRequestId) {
+      return
+    }
+    if (payload.foods.length && payload.places.length) {
+      localRecommendations.value = payload
+    }
+    recommendationMessage.value = payload.message || '已换一批推荐。'
+  } catch (error) {
+    if (requestId === recommendationRequestId) {
+      recommendationMessage.value = error instanceof Error ? error.message : '换一批失败，已保留当前推荐。'
+    }
+  } finally {
+    if (requestId === recommendationRequestId) {
+      recommendationsRefreshing.value = false
+    }
   }
 }
 
@@ -949,6 +1067,12 @@ function eventTypeText(type: NotificationEvent['eventType']) {
   return labels[type]
 }
 
+function recommendationImageFallback(event: Event) {
+  const image = event.target as HTMLImageElement
+  image.removeAttribute('src')
+  image.classList.add('image-fallback')
+}
+
 // 调用后端 AI 助手接口，把当前天气数据作为上下文一起发给后端。
 async function askAssistant() {
   const message = assistantQuestion.value.trim()
@@ -1222,6 +1346,107 @@ async function askAssistant() {
             </dl>
           </article>
           <p v-if="!forecast.length" class="empty-forecast">解析城市后会显示预报。</p>
+        </div>
+      </section>
+
+      <section class="recommendations" aria-label="本地推荐">
+        <div class="panel-heading recommendation-heading">
+          <div>
+            <h2>本地推荐</h2>
+            <span>
+              {{
+                recommendationsLoading
+                  ? '正在生成当地推荐'
+                  : recommendationsRefreshing
+                    ? '正在换一批'
+                    : recommendationMessage || (localRecommendations ? '根据当前地区生成' : '搜索地区后显示')
+              }}
+            </span>
+          </div>
+          <button
+            type="button"
+            class="refresh-button"
+            aria-label="换一批本地推荐"
+            :disabled="!canRefreshRecommendations"
+            @click="refreshRecommendations"
+          >
+            <span>{{ recommendationsRefreshing ? '刷新中' : '换一批' }}</span>
+            <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+              <path
+                d="M20 11a8.1 8.1 0 0 0-14.3-4.9L4 8m0 0h5M4 8V3m0 10a8.1 8.1 0 0 0 14.3 4.9L20 16m0 0h-5m5 0v5"
+                fill="none"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+              />
+            </svg>
+          </button>
+        </div>
+
+        <div class="recommendation-groups">
+          <p v-if="recommendationsLoading" class="recommendation-state" role="status">
+            正在加载美食和游玩地点推荐...
+          </p>
+          <p v-else-if="!weather" class="recommendation-state">
+            搜索并解析地区后，这里会显示 5 个美食和 5 个游玩地点。
+          </p>
+          <p v-else-if="recommendationMessage && !localRecommendations" class="recommendation-state" role="status">
+            {{ recommendationMessage }}
+          </p>
+          <section class="recommendation-group" aria-labelledby="food-preview-title">
+            <div class="recommendation-group-title">
+              <p class="eyebrow">Food</p>
+              <h3 id="food-preview-title">美食推荐</h3>
+            </div>
+            <ol class="recommendation-list">
+              <li v-for="item in recommendationFoods" :key="item.id" class="recommendation-card">
+                <div class="recommendation-image">
+                  <img :src="item.imageUrl" :alt="item.imageAlt" @error="recommendationImageFallback" />
+                </div>
+                <div class="recommendation-body">
+                  <div class="recommendation-title">
+                    <span class="recommendation-rank">{{ item.rank }}</span>
+                    <h4>{{ item.name }}</h4>
+                  </div>
+                  <p>{{ item.description }}</p>
+                  <a :href="item.sourceUrl" target="_blank" rel="noreferrer">
+                    来源：{{ item.sourceTitle }}
+                  </a>
+                </div>
+              </li>
+              <li v-if="!recommendationsLoading && weather && !recommendationFoods.length" class="recommendation-state">
+                暂无可展示的美食推荐。
+              </li>
+            </ol>
+          </section>
+
+          <section class="recommendation-group" aria-labelledby="place-preview-title">
+            <div class="recommendation-group-title">
+              <p class="eyebrow">Travel</p>
+              <h3 id="place-preview-title">游玩地点</h3>
+            </div>
+            <ol class="recommendation-list">
+              <li v-for="item in recommendationPlaces" :key="item.id" class="recommendation-card">
+                <div class="recommendation-image">
+                  <img :src="item.imageUrl" :alt="item.imageAlt" @error="recommendationImageFallback" />
+                </div>
+                <div class="recommendation-body">
+                  <div class="recommendation-title">
+                    <span class="recommendation-rank">{{ item.rank }}</span>
+                    <h4>{{ item.name }}</h4>
+                  </div>
+                  <p>{{ item.description }}</p>
+                  <a :href="item.sourceUrl" target="_blank" rel="noreferrer">
+                    来源：{{ item.sourceTitle }}
+                  </a>
+                </div>
+              </li>
+              <li v-if="!recommendationsLoading && weather && !recommendationPlaces.length" class="recommendation-state">
+                暂无可展示的游玩地点推荐。
+              </li>
+            </ol>
+          </section>
         </div>
       </section>
 

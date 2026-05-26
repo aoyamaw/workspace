@@ -1,0 +1,19 @@
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+network_access = true
+
+[mcp_servers.postgres]
+command = "docker"
+args = [
+    "run", "-i", "--rm",
+    "-e", "DATABASE_URI",
+    "crystaldba/postgres-mcp",
+    "--access-mode=unrestricted"
+]
+env = { DATABASE_URI = "postgresql://postgres:wasd..123@172.24.128.1:5432/data" }
+
+[mcp_servers.postgres.tools.list_schemas]
+approval_mode = "approve"
+

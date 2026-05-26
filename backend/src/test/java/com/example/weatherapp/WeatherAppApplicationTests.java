@@ -259,6 +259,84 @@ class WeatherAppApplicationTests {
     }
 
     @Test
+    void localRecommendationsPersistReuseAndRefreshWithoutDuplicates() throws Exception {
+        var userId = createAnonymousUser();
+        var locationId = "recommendation-location-" + UUID.randomUUID();
+
+        var firstBody = webTestClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/api/recommendations/local")
+                        .queryParam("providerLocationId", locationId)
+                        .queryParam("displayName", "推荐城市")
+                        .build())
+                .header("X-User-Id", userId.toString())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(String.class)
+                .returnResult()
+                .getResponseBody();
+        var first = objectMapper.readTree(firstBody);
+        assertThat(first.get("foods")).hasSize(5);
+        assertThat(first.get("places")).hasSize(5);
+        assertThat(first.at("/foods/0/sourceUrl").asText()).startsWith("https://");
+
+        var firstFoodId = first.at("/foods/0/id").asText();
+        var refreshBody = webTestClient.post()
+                .uri("/api/recommendations/local/refresh")
+                .header("X-User-Id", userId.toString())
+                .bodyValue(Map.of(
+                        "providerLocationId", locationId,
+                        "displayName", "推荐城市",
+                        "currentBatchId", first.get("batchId").asText(),
+                        "displayedItemIds", first.findValues("id").stream().map(JsonNode::asText).toList()))
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(String.class)
+                .returnResult()
+                .getResponseBody();
+        var refresh = objectMapper.readTree(refreshBody);
+        assertThat(refresh.get("foods")).hasSize(5);
+        assertThat(refresh.findValues("id").stream().map(JsonNode::asText).toList()).doesNotContain(firstFoodId);
+
+        var itemCount = databaseClient
+                .sql("""
+                        select count(*)::int as count
+                        from weather_app.local_recommendation_items
+                        where provider_location_id = :locationId
+                        """)
+                .bind("locationId", locationId)
+                .map(row -> row.get("count", Integer.class))
+                .one()
+                .block();
+        assertThat(itemCount).isGreaterThanOrEqualTo(10);
+
+        var secondUserId = createAnonymousUser();
+        webTestClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/api/recommendations/local")
+                        .queryParam("providerLocationId", locationId)
+                        .queryParam("displayName", "推荐城市")
+                        .build())
+                .header("X-User-Id", secondUserId.toString())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.foods.length()").isEqualTo(5)
+                .jsonPath("$.places.length()").isEqualTo(5);
+    }
+
+    @Test
+    void localRecommendationValidationErrorsReturnBadRequest() {
+        webTestClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/api/recommendations/local")
+                        .queryParam("providerLocationId", "missing-display")
+                        .build())
+                .exchange()
+                .expectStatus().isBadRequest();
+    }
+
+    @Test
     void validationAndOwnershipErrorsReturnExpectedStatuses() {
         var userId = createAnonymousUser();
 
