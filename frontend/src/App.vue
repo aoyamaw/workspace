@@ -239,6 +239,18 @@ const chatMessages = ref<ChatMessage[]>([
 const canSearch = computed(() => cityQuery.value.trim().length > 0)
 const forecast = computed(() => weather.value?.forecast ?? [])
 const current = computed(() => weather.value?.current ?? null)
+const forecastTemperatureBounds = computed(() => {
+  const values = forecast.value.flatMap((item) =>
+    [item.lowCelsius, item.highCelsius].filter((value): value is number => value !== null && value !== undefined),
+  )
+  if (!values.length) {
+    return { min: 0, max: 1 }
+  }
+  return {
+    min: Math.min(...values),
+    max: Math.max(...values),
+  }
+})
 const activeCandidateIndex = ref(-1)
 const recommendationFoods = computed(() => localRecommendations.value?.foods ?? [])
 const recommendationPlaces = computed(() => localRecommendations.value?.places ?? [])
@@ -1121,6 +1133,62 @@ function formatNumber(value: number | null | undefined, suffix: string) {
   return `${Math.round(value)} ${suffix}`
 }
 
+function formatTemperature(value: number | null | undefined) {
+  if (value === null || value === undefined) {
+    return '--'
+  }
+  return `${Math.round(value)}°`
+}
+
+function formatForecastDay(value: string) {
+  const date = new Date(`${value}T00:00:00`)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    weekday: 'short',
+  }).format(date)
+}
+
+function forecastTone(item: WeatherForecastDay) {
+  const condition = item.condition.toLowerCase()
+  if (condition.includes('雨') || condition.includes('rain') || (item.weatherCode !== null && item.weatherCode >= 51 && item.weatherCode < 70)) {
+    return 'rain'
+  }
+  if (condition.includes('雪') || condition.includes('snow') || (item.weatherCode !== null && item.weatherCode >= 70 && item.weatherCode < 80)) {
+    return 'snow'
+  }
+  if (condition.includes('阴') || condition.includes('cloud') || condition.includes('云') || (item.weatherCode !== null && item.weatherCode >= 2)) {
+    return 'cloud'
+  }
+  return 'sun'
+}
+
+function temperatureRangeStyle(item: WeatherForecastDay) {
+  const low = item.lowCelsius
+  const high = item.highCelsius
+  if (low === null || low === undefined || high === null || high === undefined) {
+    return { left: '0%', width: '0%' }
+  }
+
+  const min = forecastTemperatureBounds.value.min
+  const max = forecastTemperatureBounds.value.max
+  const range = Math.max(max - min, 1)
+  const start = ((low - min) / range) * 100
+  const width = Math.max(((high - low) / range) * 100, 8)
+  return {
+    left: `${Math.min(Math.max(start, 0), 100)}%`,
+    width: `${Math.min(width, 100 - Math.min(Math.max(start, 0), 100))}%`,
+  }
+}
+
+function precipitationBarStyle(item: WeatherForecastDay) {
+  const probability = item.precipitationProbabilityPercent ?? 0
+  return { width: `${Math.min(Math.max(Math.round(probability), 0), 100)}%` }
+}
+
 function formatUpdated(value: string | null | undefined) {
   if (!value) {
     return '不可用'
@@ -1504,23 +1572,37 @@ function finishAssistantButtonDrag(event: PointerEvent) {
           <span>公制单位</span>
         </div>
         <div class="forecast-grid">
-          <article v-for="item in forecast" :key="item.date" class="forecast-item">
-            <h3>{{ item.date }}</h3>
-            <p>{{ item.condition }}</p>
-            <dl>
-              <div>
-                <dt>最高</dt>
-                <dd>{{ formatNumber(item.highCelsius, '℃') }}</dd>
+          <article v-if="forecast.length" class="forecast-card">
+            <div v-for="item in forecast" :key="item.date" class="forecast-item">
+              <div class="forecast-day">
+                <h3>{{ formatForecastDay(item.date) }}</h3>
+                <small>{{ item.date }}</small>
               </div>
-              <div>
-                <dt>最低</dt>
-                <dd>{{ formatNumber(item.lowCelsius, '℃') }}</dd>
+              <div :class="['forecast-visual', forecastTone(item)]" aria-hidden="true">
+                <span class="weather-glyph">
+                  <span class="glyph-sun"></span>
+                  <span class="glyph-cloud"></span>
+                  <span class="glyph-rain"></span>
+                  <span class="glyph-snow"></span>
+                </span>
               </div>
-              <div>
-                <dt>降水</dt>
-                <dd>{{ formatNumber(item.precipitationProbabilityPercent, '%') }}</dd>
+              <div class="forecast-summary">
+                <p>{{ item.condition }}</p>
+                <div class="temperature-range" aria-label="温度范围">
+                  <span>{{ formatTemperature(item.lowCelsius) }}</span>
+                  <div class="range-track">
+                    <i :style="temperatureRangeStyle(item)"></i>
+                  </div>
+                  <span>{{ formatTemperature(item.highCelsius) }}</span>
+                </div>
+                <div class="rain-chance" aria-label="降水概率">
+                  <div class="rain-track">
+                    <i :style="precipitationBarStyle(item)"></i>
+                  </div>
+                  <span>{{ formatNumber(item.precipitationProbabilityPercent, '%') }}</span>
+                </div>
               </div>
-            </dl>
+            </div>
           </article>
           <p v-if="!forecast.length" class="empty-forecast">解析城市后会显示预报。</p>
         </div>

@@ -25,6 +25,35 @@ function recommendationPayload(prefix = '上海') {
   }
 }
 
+function forecastPayload(prefix = '北京') {
+  return [
+    {
+      date: '2026-05-27',
+      highCelsius: 29,
+      lowCelsius: 20,
+      precipitationProbabilityPercent: 8,
+      weatherCode: 1,
+      condition: '晴',
+    },
+    {
+      date: '2026-05-28',
+      highCelsius: 25,
+      lowCelsius: 18,
+      precipitationProbabilityPercent: 64,
+      weatherCode: 61,
+      condition: `${prefix}小雨`,
+    },
+    {
+      date: '2026-05-29',
+      highCelsius: 27,
+      lowCelsius: 19,
+      precipitationProbabilityPercent: 22,
+      weatherCode: 3,
+      condition: '多云',
+    },
+  ]
+}
+
 test.beforeEach(async ({ page }) => {
   await page.context().grantPermissions(['geolocation'])
   await page.context().setGeolocation({ latitude: 39.9042, longitude: 116.4074 })
@@ -101,7 +130,7 @@ test.beforeEach(async ({ page }) => {
               weatherCode: 1,
               condition: '少云',
             },
-            forecast: [],
+            forecast: forecastPayload('上海'),
             sourceName: 'MockWeather',
             timezone: 'Asia/Shanghai',
             retrievedAt: new Date().toISOString(),
@@ -140,7 +169,7 @@ test.beforeEach(async ({ page }) => {
               weatherCode: 1,
               condition: '晴',
             },
-            forecast: [],
+            forecast: forecastPayload('北京'),
             sourceName: 'MockWeather',
             timezone: 'Asia/Shanghai',
             retrievedAt: new Date().toISOString(),
@@ -169,6 +198,7 @@ test('dashboard fits without horizontal overflow', async ({ page }, testInfo) =>
   await expect(page.getByRole('heading', { name: '天气助手' })).toBeVisible()
   await expect(page.getByPlaceholder('询问出行、穿衣、景点安排或天气建议')).toBeVisible()
   await expect(page.getByRole('heading', { name: '本地推荐' })).toBeVisible()
+  await expect(page.getByText('北京小雨')).toBeVisible()
   await expect(page.getByRole('heading', { name: '美食推荐' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '游玩地点' })).toBeVisible()
   await expect(page.getByRole('button', { name: '换一批本地推荐' })).toBeVisible()
