@@ -26,6 +26,9 @@ function recommendationPayload(prefix = '上海') {
 }
 
 test.beforeEach(async ({ page }) => {
+  await page.context().grantPermissions(['geolocation'])
+  await page.context().setGeolocation({ latitude: 39.9042, longitude: 116.4074 })
+
   await page.route('http://localhost:8080/api/**', async (route) => {
     const url = new URL(route.request().url())
 
@@ -60,7 +63,7 @@ test.beforeEach(async ({ page }) => {
     }
 
     if (url.pathname === '/api/recommendations/local' && route.request().method() === 'GET') {
-      await route.fulfill({ json: recommendationPayload() })
+      await route.fulfill({ json: recommendationPayload(url.searchParams.get('displayName')?.split(',')[0] ?? '上海') })
       return
     }
 
@@ -108,6 +111,45 @@ test.beforeEach(async ({ page }) => {
       return
     }
 
+    if (url.pathname === '/api/weather/nearby') {
+      await route.fulfill({
+        json: {
+          query: '北京',
+          status: 'resolved',
+          message: 'resolved',
+          candidates: [],
+          weather: {
+            location: {
+              id: 'beijing-cn',
+              name: '北京',
+              displayName: '北京, 北京市, 中国',
+              country: '中国',
+              countryCode: 'CN',
+              admin1: '北京市',
+              timezone: 'Asia/Shanghai',
+              latitude: Number(url.searchParams.get('latitude')),
+              longitude: Number(url.searchParams.get('longitude')),
+            },
+            current: {
+              time: new Date().toISOString(),
+              temperatureCelsius: 18,
+              humidityPercent: 45,
+              windSpeedKmh: 9,
+              windDirectionDegrees: 120,
+              precipitationMm: 0,
+              weatherCode: 1,
+              condition: '晴',
+            },
+            forecast: [],
+            sourceName: 'MockWeather',
+            timezone: 'Asia/Shanghai',
+            retrievedAt: new Date().toISOString(),
+          },
+        },
+      })
+      return
+    }
+
     await route.fulfill({ status: 404, json: { message: 'Not mocked' } })
   })
 })
@@ -115,7 +157,7 @@ test.beforeEach(async ({ page }) => {
 test('dashboard fits without horizontal overflow', async ({ page }, testInfo) => {
   await page.goto('/')
 
-  await expect(page.getByRole('heading', { name: '上海，中国' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '北京, 北京市, 中国' })).toBeVisible()
   await expect(page.getByRole('combobox', { name: '城市' })).toBeVisible()
   await expect(page.getByRole('button', { name: '账号' })).toBeVisible()
   await page.getByRole('button', { name: '账号' }).click()
@@ -127,8 +169,8 @@ test('dashboard fits without horizontal overflow', async ({ page }, testInfo) =>
   await expect(page.getByRole('heading', { name: '美食推荐' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '游玩地点' })).toBeVisible()
   await expect(page.getByRole('button', { name: '换一批本地推荐' })).toBeVisible()
-  await expect(page.getByText('上海美食1')).toBeVisible()
-  await expect(page.getByText('上海地点5')).toBeVisible()
+  await expect(page.getByText('北京美食1')).toBeVisible()
+  await expect(page.getByText('北京地点5')).toBeVisible()
   await expect(page.getByRole('checkbox', { name: '开启风险提醒' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '提醒记录' })).toBeVisible()
 
@@ -144,8 +186,8 @@ test('dashboard fits without horizontal overflow', async ({ page }, testInfo) =>
 test('recommendations can refresh without losing the current weather', async ({ page }) => {
   await page.goto('/')
 
-  await expect(page.getByText('上海美食1')).toBeVisible()
+  await expect(page.getByText('北京美食1')).toBeVisible()
   await page.getByRole('button', { name: '换一批本地推荐' }).click()
   await expect(page.getByText('新一批美食1')).toBeVisible()
-  await expect(page.getByRole('heading', { name: '上海，中国' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '北京, 北京市, 中国' })).toBeVisible()
 })

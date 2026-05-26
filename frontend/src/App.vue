@@ -281,17 +281,7 @@ onMounted(async () => {
     connectNotificationStream()
     connectNotificationEventStream()
     if (!weather.value) {
-      await searchWeather({
-        id: 'shanghai-cn',
-        name: '上海',
-        displayName: selectedCity.value,
-        country: '中国',
-        countryCode: 'CN',
-        admin1: null,
-        timezone: null,
-        latitude: 31.2304,
-        longitude: 121.4737,
-      })
+      await loadInitialWeather()
     }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '应用初始化失败。'
@@ -659,6 +649,102 @@ function moveCandidate(delta: number) {
     (activeCandidateIndex.value + delta + candidates.value.length) % candidates.value.length
 }
 
+async function loadInitialWeather() {
+  try {
+    await searchWeatherByCurrentPosition()
+  } catch {
+    await searchWeather({
+      id: 'shanghai-cn',
+      name: '上海',
+      displayName: '上海, 上海市, 中国',
+      country: '中国',
+      countryCode: 'CN',
+      admin1: '上海市',
+      timezone: 'Asia/Shanghai',
+      latitude: 31.2304,
+      longitude: 121.4737,
+    })
+  }
+}
+
+async function searchWeatherByCurrentPosition() {
+  const position = await getCurrentPosition()
+  loading.value = true
+  errorMessage.value = ''
+  candidates.value = []
+  activeCandidateIndex.value = -1
+
+  try {
+    const params = new URLSearchParams({
+      latitude: String(position.coords.latitude),
+      longitude: String(position.coords.longitude),
+    })
+    const response = await fetch(`${apiBaseUrl}/api/weather/nearby?${params.toString()}`)
+    if (!response.ok) {
+      throw new Error(`定位天气查询失败，状态码 ${response.status}`)
+    }
+
+    const payload = (await response.json()) as WeatherSearchResponse
+    if (applyWeatherPayload(payload)) {
+      await loadFavorites()
+      await loadNotifications()
+    }
+  } catch (error) {
+    weather.value = null
+    localRecommendations.value = null
+    recommendationMessage.value = ''
+    throw error
+  } finally {
+    loading.value = false
+  }
+}
+
+function getCurrentPosition() {
+  return new Promise<GeolocationPosition>((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('浏览器不支持定位。'))
+      return
+    }
+
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: false,
+      timeout: 5000,
+      maximumAge: 10 * 60 * 1000,
+    })
+  })
+}
+
+function applyWeatherPayload(payload: WeatherSearchResponse) {
+  if (payload.status === 'ambiguous') {
+    candidates.value = payload.candidates
+    activeCandidateIndex.value = payload.candidates.length ? 0 : -1
+    districtCandidates.value = []
+    weather.value = null
+    localRecommendations.value = null
+    recommendationMessage.value = ''
+    errorMessage.value = payload.message
+    return false
+  }
+
+  if (payload.status === 'unsupported' || !payload.weather) {
+    districtCandidates.value = []
+    weather.value = null
+    localRecommendations.value = null
+    recommendationMessage.value = ''
+    errorMessage.value = payload.message
+    return false
+  }
+
+  weather.value = payload.weather
+  districtCandidates.value = payload.candidates.filter(
+    (candidate) => candidate.id !== payload.weather?.location.id,
+  )
+  selectedCity.value = payload.weather.location.displayName
+  cityQuery.value = payload.weather.location.name
+  void loadRecommendations(payload.weather.location)
+  return true
+}
+
 // 天气查询主流程：组装参数 -> 请求后端 -> 根据 resolved/ambiguous/unsupported 更新页面。
 async function searchWeather(location?: LocationCandidate) {
   const query = location?.name ?? cityQuery.value.trim()
@@ -683,35 +769,12 @@ async function searchWeather(location?: LocationCandidate) {
     }
 
     const payload = (await response.json()) as WeatherSearchResponse
-    if (payload.status === 'ambiguous') {
-      candidates.value = payload.candidates
-      activeCandidateIndex.value = payload.candidates.length ? 0 : -1
-      districtCandidates.value = []
-      weather.value = null
-      localRecommendations.value = null
-      recommendationMessage.value = ''
-      errorMessage.value = payload.message
+    if (!applyWeatherPayload(payload)) {
       return
     }
 
-    if (payload.status === 'unsupported' || !payload.weather) {
-      districtCandidates.value = []
-      weather.value = null
-      localRecommendations.value = null
-      recommendationMessage.value = ''
-      errorMessage.value = payload.message
-      return
-    }
-
-    weather.value = payload.weather
-    districtCandidates.value = payload.candidates.filter(
-      (candidate) => candidate.id !== payload.weather?.location.id,
-    )
-    selectedCity.value = payload.weather.location.displayName
-    cityQuery.value = payload.weather.location.name
     await loadFavorites()
     await loadNotifications()
-    void loadRecommendations(payload.weather.location)
   } catch (error) {
     weather.value = null
     localRecommendations.value = null

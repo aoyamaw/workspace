@@ -60,6 +60,14 @@ public class WeatherService {
 		return searchOpenMeteo(query, locationId);
 	}
 
+	public Mono<WeatherSearchResponse> nearby(double latitude, double longitude) {
+		var candidate = cityIndex.nearestTo(latitude, longitude);
+		if (candidate == null) {
+			return Mono.just(WeatherSearchResponse.unsupported("当前位置"));
+		}
+		return search(candidate.name(), candidate.id());
+	}
+
 	public Mono<Void> refreshCache(LocationCandidate location) {
 		if (location == null) {
 			return Mono.empty();

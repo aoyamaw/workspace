@@ -24,4 +24,12 @@ public class WeatherQueryController {
 		// 前端搜索城市时进入这里，再由 WeatherService 去匹配城市并请求天气数据。
 		return weatherService.search(city, locationId);
 	}
+
+	@GetMapping("/api/weather/nearby")
+	Mono<WeatherSearchResponse> nearby(
+			@RequestParam("latitude") double latitude,
+			@RequestParam("longitude") double longitude
+	) {
+		return weatherService.nearby(latitude, longitude);
+	}
 }

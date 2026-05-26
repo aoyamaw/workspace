@@ -348,6 +348,18 @@ class WeatherAppApplicationTests {
                 .jsonPath("$.status").isEqualTo("ambiguous")
                 .jsonPath("$.candidates[0].displayName").isEqualTo("上海, 上海市, 中国");
 
+        webTestClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/api/weather/nearby")
+                        .queryParam("latitude", 39.9)
+                        .queryParam("longitude", 116.4)
+                        .build())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.status").isEqualTo("resolved")
+                .jsonPath("$.weather.location.id").isEqualTo("beijing-cn");
+
         webTestClient.post()
                 .uri("/api/notifications/subscriptions")
                 .header("X-User-Id", userId.toString())

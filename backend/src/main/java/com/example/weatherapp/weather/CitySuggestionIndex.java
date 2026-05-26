@@ -48,6 +48,13 @@ public class CitySuggestionIndex {
 				.orElse(null);
 	}
 
+	public LocationCandidate nearestTo(double latitude, double longitude) {
+		return cities.stream()
+				.min(Comparator.comparingDouble(city -> city.distanceSquared(latitude, longitude)))
+				.map(IndexedCity::candidate)
+				.orElse(null);
+	}
+
 	private static String normalize(String value) {
 		return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
 	}
@@ -78,6 +85,12 @@ public class CitySuggestionIndex {
 				return 1;
 			}
 			return 2;
+		}
+
+		double distanceSquared(double latitude, double longitude) {
+			var latitudeDelta = this.latitude - latitude;
+			var longitudeDelta = this.longitude - longitude;
+			return latitudeDelta * latitudeDelta + longitudeDelta * longitudeDelta;
 		}
 
 		LocationCandidate candidate() {
