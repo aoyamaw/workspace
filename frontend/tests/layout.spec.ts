@@ -117,6 +117,10 @@ test('dashboard fits without horizontal overflow', async ({ page }, testInfo) =>
 
   await expect(page.getByRole('heading', { name: '上海，中国' })).toBeVisible()
   await expect(page.getByRole('combobox', { name: '城市' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '账号' })).toBeVisible()
+  await page.getByRole('button', { name: '账号' }).click()
+  await expect(page.getByRole('heading', { name: '账号登录' })).toBeVisible()
+  await expect(page.getByPlaceholder('邮箱')).toBeVisible()
   await expect(page.getByRole('heading', { name: '收藏城市' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '天气助手' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '本地推荐' })).toBeVisible()

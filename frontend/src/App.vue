@@ -196,6 +196,7 @@ const authPassword = ref('')
 const authDisplayName = ref('')
 const authLoading = ref(false)
 const authMessage = ref('')
+const authMenuOpen = ref(false)
 const currentUser = ref<SessionResponse | null>(null)
 const candidates = ref<LocationCandidate[]>([])
 const weather = ref<WeatherResult | null>(null)
@@ -394,6 +395,7 @@ async function submitAuth() {
     applySession(session, session.token)
     authPassword.value = ''
     authMessage.value = authMode.value === 'login' ? '已登录。' : '注册成功，已登录。'
+    authMenuOpen.value = false
     await reloadUserData()
   } catch (error) {
     authMessage.value = error instanceof Error ? error.message : '账户操作失败。'
@@ -1161,61 +1163,95 @@ async function askAssistant() {
             </div>
           </div>
           <button type="submit" :disabled="!canSearch">搜索</button>
+          <div class="account-menu">
+            <button
+              type="button"
+              class="account-trigger"
+              :aria-expanded="authMenuOpen"
+              aria-controls="account-card"
+              @click="authMenuOpen = !authMenuOpen"
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24">
+                <path
+                  d="M20 21a8 8 0 0 0-16 0M12 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10Z"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+              <span>账号</span>
+            </button>
+
+            <section v-if="authMenuOpen" id="account-card" class="account-card" aria-label="用户账户">
+              <div class="account-card-header">
+                <div>
+                  <h2>{{ currentUser ? currentUser.displayName : '账号登录' }}</h2>
+                  <p>
+                    {{
+                      currentUser
+                        ? `${currentUser.email} 的收藏和风险提醒已同步。`
+                        : '登录后同步收藏、风险提醒和助手记录。'
+                    }}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="icon-button"
+                  aria-label="关闭账号面板"
+                  @click="authMenuOpen = false"
+                >
+                  ×
+                </button>
+              </div>
+
+              <form v-if="!currentUser" class="auth-form" @submit.prevent="submitAuth">
+                <div class="auth-mode" role="tablist" aria-label="账户模式">
+                  <button
+                    type="button"
+                    :class="{ active: authMode === 'login' }"
+                    @click="authMode = 'login'"
+                  >
+                    登录
+                  </button>
+                  <button
+                    type="button"
+                    :class="{ active: authMode === 'register' }"
+                    @click="authMode = 'register'"
+                  >
+                    注册
+                  </button>
+                </div>
+                <input v-model="authEmail" type="email" placeholder="邮箱" autocomplete="email" />
+                <input
+                  v-model="authPassword"
+                  type="password"
+                  placeholder="密码"
+                  autocomplete="current-password"
+                />
+                <input
+                  v-if="authMode === 'register'"
+                  v-model="authDisplayName"
+                  type="text"
+                  placeholder="显示名称"
+                  autocomplete="name"
+                />
+                <button type="submit" :disabled="authLoading">
+                  {{ authLoading ? '处理中' : authMode === 'login' ? '登录' : '注册并登录' }}
+                </button>
+              </form>
+              <button v-else type="button" class="secondary-button account-logout" @click="logout">
+                退出登录
+              </button>
+              <p v-if="authMessage" class="auth-message" role="status">{{ authMessage }}</p>
+            </section>
+          </div>
         </div>
       </form>
     </section>
 
     <section class="dashboard" aria-label="天气工作台">
-      <section class="account-panel" aria-label="用户账户">
-        <div>
-          <h2>{{ currentUser ? currentUser.displayName : '账户' }}</h2>
-          <p>
-            {{
-              currentUser
-                ? `${currentUser.email} 的收藏和风险提醒已同步。`
-                : '登录后收藏城市、风险提醒和助手记录会保存到你的账户。'
-            }}
-          </p>
-        </div>
-        <form v-if="!currentUser" class="auth-form" @submit.prevent="submitAuth">
-          <div class="auth-mode" role="tablist" aria-label="账户模式">
-            <button
-              type="button"
-              :class="{ active: authMode === 'login' }"
-              @click="authMode = 'login'"
-            >
-              登录
-            </button>
-            <button
-              type="button"
-              :class="{ active: authMode === 'register' }"
-              @click="authMode = 'register'"
-            >
-              注册
-            </button>
-          </div>
-          <input v-model="authEmail" type="email" placeholder="邮箱" autocomplete="email" />
-          <input
-            v-model="authPassword"
-            type="password"
-            placeholder="密码"
-            autocomplete="current-password"
-          />
-          <input
-            v-if="authMode === 'register'"
-            v-model="authDisplayName"
-            type="text"
-            placeholder="显示名称"
-            autocomplete="name"
-          />
-          <button type="submit" :disabled="authLoading">
-            {{ authLoading ? '处理中' : authMode === 'login' ? '登录' : '注册并登录' }}
-          </button>
-        </form>
-        <button v-else type="button" class="secondary-button" @click="logout">退出登录</button>
-        <p v-if="authMessage" class="auth-message" role="status">{{ authMessage }}</p>
-      </section>
-
       <article class="current-weather" aria-label="当前天气">
         <div class="weather-main">
           <span class="temperature">{{

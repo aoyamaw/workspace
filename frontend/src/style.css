@@ -137,7 +137,7 @@ textarea {
 
 .search-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 8px;
 }
 
@@ -199,7 +199,6 @@ textarea {
 }
 
 .current-weather,
-.account-panel,
 .favorites,
 .forecast,
 .recommendations,
@@ -219,25 +218,87 @@ textarea {
   gap: 28px;
 }
 
-.account-panel {
-  grid-column: span 2;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 560px);
-  align-items: center;
-  gap: 14px;
-  padding: 18px;
+.account-menu {
+  position: relative;
 }
 
-.account-panel p {
-  margin-top: 4px;
+.account-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.account-trigger svg {
+  width: 18px;
+  height: 18px;
+}
+
+.account-card {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 10px);
+  right: 0;
+  display: grid;
+  width: min(360px, calc(100vw - 32px));
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 20px 44px rgb(15 23 42 / 18%);
+}
+
+.account-card::before {
+  position: absolute;
+  top: -7px;
+  right: 24px;
+  width: 12px;
+  height: 12px;
+  border-top: 1px solid #cbd5e1;
+  border-left: 1px solid #cbd5e1;
+  background: #ffffff;
+  content: "";
+  transform: rotate(45deg);
+}
+
+.account-card-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.account-card-header p {
+  margin-top: 6px;
   color: #475569;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.icon-button {
+  display: inline-grid;
+  width: 32px;
+  min-height: 32px;
+  place-items: center;
+  border-color: #e2e8f0;
+  background: #ffffff;
+  color: #475569;
+  font-size: 22px;
+  line-height: 1;
+  padding: 0;
+}
+
+.icon-button:hover {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  color: #0f172a;
 }
 
 .auth-form {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr) auto;
+  grid-template-columns: 1fr;
   gap: 8px;
-  align-items: center;
 }
 
 .auth-mode {
@@ -262,7 +323,13 @@ textarea {
 }
 
 .auth-message {
-  grid-column: 1 / -1;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.account-logout {
+  width: 100%;
 }
 
 .weather-main {
@@ -744,9 +811,17 @@ textarea {
 
   .toolbar,
   .dashboard,
-  .assistant,
-  .account-panel {
+  .assistant {
     grid-template-columns: 1fr;
+  }
+
+  .search-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .account-menu {
+    grid-column: 1 / -1;
+    justify-self: end;
   }
 
   h1 {
@@ -767,14 +842,9 @@ textarea {
   .recommendations,
   .assistant,
   .notifications,
-  .account-panel,
   .notification-events,
   .assistant .panel-heading {
     grid-column: auto;
-  }
-
-  .auth-form {
-    grid-template-columns: 1fr;
   }
 
   .assistant-form {
