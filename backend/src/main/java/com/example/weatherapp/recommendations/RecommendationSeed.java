@@ -7,6 +7,7 @@ record RecommendationSeed(
 		String imageUrl,
 		String imageAlt,
 		String sourceTitle,
-		String sourceUrl
+		String sourceUrl,
+		boolean fallback
 ) {
 }

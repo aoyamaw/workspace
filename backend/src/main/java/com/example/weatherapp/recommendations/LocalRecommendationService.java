@@ -21,6 +21,14 @@ import reactor.core.publisher.Mono;
 public class LocalRecommendationService {
 
 	private static final int CATEGORY_SIZE = 5;
+	private static final String SHANGHAI_FALLBACK_FILTER = """
+			('三虾面', '枫泾丁蹄', '下沙烧卖', '崇明糕', '高桥松饼',
+			 '南翔小笼', '条头糕薄荷糕', '梨膏糖', '鲜肉月饼', '草头圈子',
+			 '油墩子', '蟹壳黄', '排骨年糕', '罗宋汤', '八宝鸭',
+			 '外滩', '豫园', '上海博物馆', '武康路', '上海自然博物馆',
+			 '田子坊', '朱家角古镇', '中华艺术宫', '上海天文馆', '思南公馆',
+			 '龙华寺', '静安寺', '上海当代艺术博物馆', '共青森林公园', '徐家汇书院')
+			""";
 
 	private final DatabaseClient databaseClient;
 	private final LocalRecommendationGenerator generator;
@@ -31,7 +39,7 @@ public class LocalRecommendationService {
 	}
 
 	public Mono<LocalRecommendationResponse> initial(UUID ownerId, String providerLocationId, String displayName) {
-		return buildBatch(ownerId, normalizeLocationId(providerLocationId), normalizeDisplayName(displayName), List.of(), "initial");
+		return buildBatch(ownerId, normalizeLocationId(providerLocationId), normalizeDisplayName(displayName), List.of(), "initial", false);
 	}
 
 	public Mono<LocalRecommendationResponse> refresh(UUID ownerId, LocalRecommendationRefreshRequest request) {
@@ -47,7 +55,8 @@ public class LocalRecommendationService {
 						normalizeLocationId(request.providerLocationId()),
 						normalizeDisplayName(request.displayName()),
 						excluded,
-						"refresh"
+						"refresh",
+						true
 				));
 	}
 
@@ -57,18 +66,19 @@ public class LocalRecommendationService {
 			String providerLocationId,
 			String displayName,
 			List<UUID> excludedIds,
-			String batchType
+			String batchType,
+			boolean excludeViewed
 	) {
 		return ensurePool(providerLocationId, displayName, 0)
-				.then(selectCategory(ownerId, providerLocationId, RecommendationCategory.food, excludedIds))
-				.zipWith(selectCategory(ownerId, providerLocationId, RecommendationCategory.place, excludedIds))
+				.then(selectCategory(ownerId, providerLocationId, RecommendationCategory.food, excludedIds, excludeViewed))
+				.zipWith(selectCategory(ownerId, providerLocationId, RecommendationCategory.place, excludedIds, excludeViewed))
 				.flatMap(tuple -> {
 					var foods = tuple.getT1();
 					var places = tuple.getT2();
 					if (foods.size() < CATEGORY_SIZE || places.size() < CATEGORY_SIZE) {
-						return ensurePool(providerLocationId, displayName, (int) (System.nanoTime() % 11))
-								.then(selectCategory(ownerId, providerLocationId, RecommendationCategory.food, excludedIds))
-								.zipWith(selectCategory(ownerId, providerLocationId, RecommendationCategory.place, excludedIds));
+						return generatePool(providerLocationId, displayName, (int) (System.nanoTime() % 11))
+								.then(selectCategory(ownerId, providerLocationId, RecommendationCategory.food, excludedIds, excludeViewed))
+								.zipWith(selectCategory(ownerId, providerLocationId, RecommendationCategory.place, excludedIds, excludeViewed));
 					}
 					return Mono.just(tuple);
 				})
@@ -76,24 +86,42 @@ public class LocalRecommendationService {
 	}
 
 	private Mono<Void> ensurePool(String providerLocationId, String displayName, int offset) {
-		return countItems(providerLocationId)
-				.flatMap(count -> {
-					if (count >= CATEGORY_SIZE * 2L) {
+		return countItems(providerLocationId, RecommendationCategory.food)
+				.zipWith(countItems(providerLocationId, RecommendationCategory.place))
+				.flatMap(counts -> {
+					if (counts.getT1() >= CATEGORY_SIZE && counts.getT2() >= CATEGORY_SIZE) {
 						return Mono.empty();
 					}
-					return Flux.fromIterable(generator.generate(displayName, offset))
-							.flatMap(seed -> saveSeed(providerLocationId, displayName, seed))
-							.then();
+					return generatePool(providerLocationId, displayName, offset);
 				});
 	}
 
-	private Mono<Long> countItems(String providerLocationId) {
-		return databaseClient.sql("""
+	private Mono<Void> generatePool(String providerLocationId, String displayName, int offset) {
+		return generator.generate(displayName, offset)
+				.flatMapMany(Flux::fromIterable)
+				.flatMap(seed -> saveSeed(providerLocationId, displayName, seed))
+				.then();
+	}
+
+	private Mono<Long> countItems(String providerLocationId, RecommendationCategory category) {
+		var sql = new StringBuilder("""
 				select count(*) as item_count
 				from weather_app.local_recommendation_items
 				where provider_location_id = :providerLocationId
-				""")
+				  and category = :category
+				  and not (
+				      name like '%' || display_name || '%'
+				      or description like '适合快速体验%'
+				      or description like '适合加入%'
+				      or (display_name not like '%上海%' and name in __SHANGHAI_FALLBACK_FILTER__)
+				  )
+				""".replace("__SHANGHAI_FALLBACK_FILTER__", SHANGHAI_FALLBACK_FILTER));
+		if (generator.aiConfigured()) {
+			sql.append(" and generated_by = 'ai'\n");
+		}
+		return databaseClient.sql(sql.toString())
 				.bind("providerLocationId", providerLocationId)
+				.bind("category", category.name())
 				.map((row, metadata) -> row.get("item_count", Long.class))
 				.one()
 				.defaultIfEmpty(0L);
@@ -101,14 +129,15 @@ public class LocalRecommendationService {
 
 	private Mono<Void> saveSeed(String providerLocationId, String displayName, RecommendationSeed seed) {
 		var sourceUrl = validUrl(seed.sourceUrl()) ? seed.sourceUrl() : "https://www.mct.gov.cn/";
+		var name = sanitizeName(seed.name(), displayName);
 		return databaseClient.sql("""
 				insert into weather_app.local_recommendation_items (
 				    provider_location_id, display_name, category, name, description, image_url,
-				    image_alt, source_title, source_url, content_fingerprint
+				    image_alt, source_title, source_url, content_fingerprint, generated_by
 				)
 				values (
 				    :providerLocationId, :displayName, :category, :name, :description, :imageUrl,
-				    :imageAlt, :sourceTitle, :sourceUrl, :fingerprint
+				    :imageAlt, :sourceTitle, :sourceUrl, :fingerprint, :generatedBy
 				)
 				on conflict (provider_location_id, category, content_fingerprint)
 				do update set updated_at = now()
@@ -116,13 +145,14 @@ public class LocalRecommendationService {
 				.bind("providerLocationId", providerLocationId)
 				.bind("displayName", displayName)
 				.bind("category", seed.category().name())
-				.bind("name", bounded(seed.name(), 80))
+				.bind("name", bounded(name, 80))
 				.bind("description", bounded(seed.description(), 120))
 				.bind("imageUrl", validUrl(seed.imageUrl()) ? seed.imageUrl() : fallbackImageUrl())
-				.bind("imageAlt", bounded(seed.imageAlt(), 80))
+				.bind("imageAlt", bounded(sanitizeName(seed.imageAlt(), displayName), 80))
 				.bind("sourceTitle", bounded(seed.sourceTitle(), 80))
 				.bind("sourceUrl", sourceUrl)
-				.bind("fingerprint", fingerprint(providerLocationId, seed.category(), seed.name()))
+				.bind("fingerprint", fingerprint(providerLocationId, seed.category(), name))
+				.bind("generatedBy", seed.fallback() ? "fallback" : "ai")
 				.then();
 	}
 
@@ -130,7 +160,8 @@ public class LocalRecommendationService {
 			UUID ownerId,
 			String providerLocationId,
 			RecommendationCategory category,
-			List<UUID> excludedIds
+			List<UUID> excludedIds,
+			boolean excludeViewed
 	) {
 		var excluded = excludedIds == null ? List.<UUID>of() : excludedIds.stream().filter(Objects::nonNull).toList();
 		var sql = new StringBuilder("""
@@ -139,23 +170,38 @@ public class LocalRecommendationService {
 				from weather_app.local_recommendation_items i
 				where i.provider_location_id = :providerLocationId
 				  and i.category = :category
+				  and not (
+				      i.name like '%' || i.display_name || '%'
+				      or i.description like '适合快速体验%'
+				      or i.description like '适合加入%'
+				      or (i.display_name not like '%上海%' and i.name in __SHANGHAI_FALLBACK_FILTER__)
+				  )
+				""".replace("__SHANGHAI_FALLBACK_FILTER__", SHANGHAI_FALLBACK_FILTER));
+		if (excludeViewed) {
+			sql.append("""
 				  and (:ownerId is null or not exists (
 				      select 1 from weather_app.local_recommendation_views v
 				      where v.owner_id = :ownerId and v.provider_location_id = :providerLocationId
 				        and v.recommendation_item_id = i.id
 				  ))
 				""");
+		}
 		for (int index = 0; index < excluded.size(); index++) {
 			sql.append(" and i.id <> :excludedId").append(index).append("\n");
 		}
 		sql.append("""
-				order by i.created_at desc, i.name
+				order by
+				  case i.generated_by when 'ai' then 0 when 'fallback' then 1 else 2 end,
+				  i.created_at desc,
+				  i.name
 				limit 5
 				""");
 		var spec = databaseClient.sql(sql.toString())
 				.bind("providerLocationId", providerLocationId)
 				.bind("category", category.name());
-		spec = ownerId == null ? spec.bindNull("ownerId", UUID.class) : spec.bind("ownerId", ownerId);
+		if (excludeViewed) {
+			spec = ownerId == null ? spec.bindNull("ownerId", UUID.class) : spec.bind("ownerId", ownerId);
+		}
 		for (int index = 0; index < excluded.size(); index++) {
 			spec = spec.bind("excludedId" + index, excluded.get(index));
 		}
@@ -317,6 +363,35 @@ public class LocalRecommendationService {
 	private static String bounded(String value, int maxLength) {
 		var normalized = value == null || value.isBlank() ? "暂无说明" : value.trim();
 		return normalized.length() <= maxLength ? normalized : normalized.substring(0, maxLength);
+	}
+
+	private static String sanitizeName(String value, String displayName) {
+		if (value == null || value.isBlank()) {
+			return "";
+		}
+		var result = value.trim();
+		for (var token : locationTokens(displayName)) {
+			result = result.replace(token, "");
+		}
+		return result
+				.replace("，", "")
+				.replace(",", "")
+				.replace("  ", " ")
+				.trim();
+	}
+
+	private static List<String> locationTokens(String displayName) {
+		if (displayName == null || displayName.isBlank()) {
+			return List.of();
+		}
+		var tokens = new ArrayList<String>();
+		for (var token : displayName.split("[,，]")) {
+			var normalized = token.trim();
+			if (!normalized.isBlank()) {
+				tokens.add(normalized);
+			}
+		}
+		return tokens;
 	}
 
 	private static boolean validUrl(String value) {

@@ -224,3 +224,81 @@ test('recommendations can refresh without losing the current weather', async ({ 
   await expect(page.getByText('新一批美食1')).toBeVisible()
   await expect(page.getByRole('heading', { name: '北京, 北京市, 中国' })).toBeVisible()
 })
+
+test('initial Shanghai fallback keeps recommendation cards loading until data arrives', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'geolocation', {
+      value: {
+        getCurrentPosition: (
+          _success: PositionCallback,
+          error?: PositionErrorCallback,
+        ) => {
+          error?.({
+            code: 1,
+            message: 'Permission denied',
+            PERMISSION_DENIED: 1,
+            POSITION_UNAVAILABLE: 2,
+            TIMEOUT: 3,
+          })
+        },
+      },
+      configurable: true,
+    })
+  })
+
+  let resolveRecommendations: (() => void) | undefined
+  const recommendationsReady = new Promise<void>((resolve) => {
+    resolveRecommendations = resolve
+  })
+
+  await page.route('http://localhost:8080/api/recommendations/local?**', async (route) => {
+    await recommendationsReady
+    const url = new URL(route.request().url())
+    await route.fulfill({
+      json: recommendationPayload(url.searchParams.get('displayName')?.split(',')[0] ?? '上海'),
+    })
+  })
+
+  await page.goto('/')
+
+  await expect(page.getByRole('heading', { name: '上海，中国' })).toBeVisible()
+  await expect(page.getByText('正在加载美食和游玩地点推荐...')).toBeVisible()
+  await expect(page.getByText('暂无可展示的美食推荐。')).toHaveCount(0)
+  await expect(page.getByText('暂无可展示的游玩地点推荐。')).toHaveCount(0)
+
+  resolveRecommendations?.()
+  await expect(page.getByText('上海，中国美食1')).toBeVisible()
+  await expect(page.getByText('上海，中国地点5')).toBeVisible()
+})
+
+test('initial recommendations recover when user-scoped response is empty', async ({ page }) => {
+  let emptyUserScopedResponses = 0
+
+  await page.route('http://localhost:8080/api/recommendations/local?**', async (route) => {
+    const userId = route.request().headers()['x-user-id']
+    if (userId) {
+      emptyUserScopedResponses += 1
+      await route.fulfill({
+        json: {
+          batchId: 'empty-user-batch',
+          providerLocationId: 'beijing-cn',
+          displayName: '北京, 北京市, 中国',
+          foods: [],
+          places: [],
+          hasMore: false,
+          message: '暂无更多不重复推荐。',
+          generatedAt: new Date().toISOString(),
+        },
+      })
+      return
+    }
+
+    await route.fulfill({ json: recommendationPayload('北京') })
+  })
+
+  await page.goto('/')
+
+  await expect(page.getByText('北京美食1')).toBeVisible()
+  await expect(page.getByText('北京地点5')).toBeVisible()
+  expect(emptyUserScopedResponses).toBeGreaterThan(0)
+})

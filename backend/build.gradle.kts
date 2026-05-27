@@ -27,6 +27,7 @@ dependencies {
 	implementation("org.flywaydb:flyway-database-postgresql")
 	implementation("org.springframework:spring-jdbc")
 	implementation("nl.martijndwars:web-push:5.1.1")
+	implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
 	runtimeOnly("org.postgresql:postgresql")
 	runtimeOnly("org.postgresql:r2dbc-postgresql")
 	testImplementation("org.springframework.boot:spring-boot-starter-test")

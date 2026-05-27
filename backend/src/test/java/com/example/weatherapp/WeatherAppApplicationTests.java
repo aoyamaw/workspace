@@ -280,6 +280,20 @@ class WeatherAppApplicationTests {
         assertThat(first.get("places")).hasSize(5);
         assertThat(first.at("/foods/0/sourceUrl").asText()).startsWith("https://");
 
+        webTestClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/api/recommendations/local")
+                        .queryParam("providerLocationId", locationId)
+                        .queryParam("displayName", "推荐城市")
+                        .build())
+                .header("X-User-Id", userId.toString())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.foods.length()").isEqualTo(5)
+                .jsonPath("$.places.length()").isEqualTo(5)
+                .jsonPath("$.message").isEqualTo("");
+
         var firstFoodId = first.at("/foods/0/id").asText();
         var refreshBody = webTestClient.post()
                 .uri("/api/recommendations/local/refresh")
@@ -334,6 +348,55 @@ class WeatherAppApplicationTests {
                         .build())
                 .exchange()
                 .expectStatus().isBadRequest();
+    }
+
+    @Test
+    void localRecommendationsRepairCategoryImbalancedPool() {
+        var userId = createAnonymousUser();
+        var locationId = "imbalanced-recommendation-location-" + UUID.randomUUID();
+        for (int index = 0; index < 10; index++) {
+            insertRecommendationItem(locationId, "偏置城市", "food", "偏置美食" + index);
+        }
+
+        webTestClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/api/recommendations/local")
+                        .queryParam("providerLocationId", locationId)
+                        .queryParam("displayName", "偏置城市")
+                        .build())
+                .header("X-User-Id", userId.toString())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.foods.length()").isEqualTo(5)
+                .jsonPath("$.places.length()").isEqualTo(5)
+                .jsonPath("$.message").isEqualTo("");
+    }
+
+    @Test
+    void localRecommendationsDoNotReuseShanghaiFallbackForOtherCities() throws Exception {
+        var userId = createAnonymousUser();
+        var locationId = "beijing-recommendation-" + UUID.randomUUID();
+        insertRecommendationItem(locationId, "北京, 北京市, 中国", "food", "三虾面");
+        insertRecommendationItem(locationId, "北京, 北京市, 中国", "place", "外滩");
+
+        var body = webTestClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/api/recommendations/local")
+                        .queryParam("providerLocationId", locationId)
+                        .queryParam("displayName", "北京, 北京市, 中国")
+                        .build())
+                .header("X-User-Id", userId.toString())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(String.class)
+                .returnResult()
+                .getResponseBody();
+
+        var payload = objectMapper.readTree(body);
+        assertThat(payload.findValues("name").stream().map(JsonNode::asText).toList())
+                .doesNotContain("三虾面", "外滩")
+                .contains("豆汁", "首都博物馆");
     }
 
     @Test
@@ -457,6 +520,48 @@ class WeatherAppApplicationTests {
                 .bind("observedAt", Instant.now())
                 .bind("expiresAt", Instant.now().plusSeconds(1800))
                 .bind("updatedAt", Instant.now())
+                .then()
+                .block();
+    }
+
+    private void insertRecommendationItem(String locationId, String displayName, String category, String name) {
+        databaseClient
+                .sql("""
+                        insert into weather_app.local_recommendation_items (
+                            provider_location_id,
+                            display_name,
+                            category,
+                            name,
+                            description,
+                            image_url,
+                            image_alt,
+                            source_title,
+                            source_url,
+                            content_fingerprint
+                        )
+                        values (
+                            :locationId,
+                            :displayName,
+                            :category,
+                            :name,
+                            :description,
+                            :imageUrl,
+                            :imageAlt,
+                            :sourceTitle,
+                            :sourceUrl,
+                            :fingerprint
+                        )
+                        """)
+                .bind("locationId", locationId)
+                .bind("displayName", displayName)
+                .bind("category", category)
+                .bind("name", name)
+                .bind("description", name + "说明")
+                .bind("imageUrl", "https://example.com/image.jpg")
+                .bind("imageAlt", name + "插图")
+                .bind("sourceTitle", "测试来源")
+                .bind("sourceUrl", "https://example.com/source")
+                .bind("fingerprint", UUID.randomUUID().toString())
                 .then()
                 .block();
     }

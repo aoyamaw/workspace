@@ -254,6 +254,7 @@ const forecastTemperatureBounds = computed(() => {
 const activeCandidateIndex = ref(-1)
 const recommendationFoods = computed(() => localRecommendations.value?.foods ?? [])
 const recommendationPlaces = computed(() => localRecommendations.value?.places ?? [])
+const recommendationsResolved = computed(() => Boolean(localRecommendations.value || recommendationMessage.value))
 const displayedRecommendationIds = computed(() => [
   ...recommendationFoods.value.map((item) => item.id),
   ...recommendationPlaces.value.map((item) => item.id),
@@ -681,6 +682,9 @@ function moveCandidate(delta: number) {
 }
 
 async function loadInitialWeather() {
+  loading.value = true
+  recommendationsLoading.value = true
+  recommendationMessage.value = ''
   try {
     await searchWeatherByCurrentPosition()
   } catch {
@@ -695,12 +699,16 @@ async function loadInitialWeather() {
       latitude: 31.2304,
       longitude: 121.4737,
     })
+  } finally {
+    loading.value = false
+    if (!weather.value) {
+      recommendationsLoading.value = false
+    }
   }
 }
 
 async function searchWeatherByCurrentPosition() {
   const position = await getCurrentPosition()
-  loading.value = true
   errorMessage.value = ''
   candidates.value = []
   activeCandidateIndex.value = -1
@@ -725,8 +733,6 @@ async function searchWeatherByCurrentPosition() {
     localRecommendations.value = null
     recommendationMessage.value = ''
     throw error
-  } finally {
-    loading.value = false
   }
 }
 
@@ -836,8 +842,14 @@ async function loadRecommendations(location: LocationCandidate) {
     if (requestId !== recommendationRequestId) {
       return
     }
-    localRecommendations.value = payload
-    recommendationMessage.value = payload.message
+    const resolvedPayload = hasRecommendationItems(payload)
+      ? payload
+      : await loadPublicRecommendations(location, requestId)
+    if (requestId !== recommendationRequestId) {
+      return
+    }
+    localRecommendations.value = resolvedPayload
+    recommendationMessage.value = resolvedPayload.message
   } catch (error) {
     if (requestId === recommendationRequestId) {
       recommendationMessage.value = error instanceof Error ? error.message : '本地推荐暂不可用。'
@@ -847,6 +859,26 @@ async function loadRecommendations(location: LocationCandidate) {
       recommendationsLoading.value = false
     }
   }
+}
+
+function hasRecommendationItems(payload: LocalRecommendationResponse) {
+  return payload.foods.length > 0 || payload.places.length > 0
+}
+
+async function loadPublicRecommendations(location: LocationCandidate, requestId: number) {
+  const params = new URLSearchParams({
+    providerLocationId: location.id,
+    displayName: location.displayName,
+  })
+  const response = await fetch(`${apiBaseUrl}/api/recommendations/local?${params.toString()}`)
+  if (!response.ok) {
+    throw new Error(`读取本地推荐失败，状态码 ${response.status}`)
+  }
+  const payload = (await response.json()) as LocalRecommendationResponse
+  if (requestId !== recommendationRequestId) {
+    return payload
+  }
+  return payload
 }
 
 async function refreshRecommendations() {
@@ -1674,7 +1706,10 @@ function finishAssistantButtonDrag(event: PointerEvent) {
                   </a>
                 </div>
               </li>
-              <li v-if="!recommendationsLoading && weather && !recommendationFoods.length" class="recommendation-state">
+              <li
+                v-if="!recommendationsLoading && recommendationsResolved && weather && !recommendationFoods.length"
+                class="recommendation-state"
+              >
                 暂无可展示的美食推荐。
               </li>
             </ol>
@@ -1701,7 +1736,10 @@ function finishAssistantButtonDrag(event: PointerEvent) {
                   </a>
                 </div>
               </li>
-              <li v-if="!recommendationsLoading && weather && !recommendationPlaces.length" class="recommendation-state">
+              <li
+                v-if="!recommendationsLoading && recommendationsResolved && weather && !recommendationPlaces.length"
+                class="recommendation-state"
+              >
                 暂无可展示的游玩地点推荐。
               </li>
             </ol>
